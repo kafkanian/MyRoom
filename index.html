@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>15평 원룸 평면도 인테리어 플래너</title>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    <style>
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; background-color: #f1f3f5; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; user-select: none; }
+        
+        .header-ui { position: sticky; top: 0; width: 100%; background: white; z-index: 1000; padding: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; align-items: center; gap: 8px; }
+        .controls-bar { display: flex; gap: 10px; width: 95vw; max-width: 850px; justify-content: space-between; align-items: center; }
+        .rotate-btn { padding: 8px 16px; background: #228be6; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; transition: background 0.15s; }
+        .rotate-btn:hover { background: #1c7ed6; }
+        
+        .palette { 
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(95px, 1fr)); gap: 8px; 
+            width: 95vw; max-width: 850px; max-height: 200px; overflow-y: auto; 
+            padding: 10px; background: #f8f9fa; border-radius: 10px; border: 1px solid #e9ecef;
+        }
+        .tile-btn { padding: 6px 4px; border: 1.5px solid #dee2e6; border-radius: 8px; cursor: pointer; text-align: center; font-size: 11px; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .tile-btn.active { border-color: #339af0; background: #e7f5ff; font-weight: bold; }
+        .tile-preview { width: 42px; height: 42px; margin-bottom: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; border: 0.5px solid #ced4da; position: relative; overflow: hidden; background: #fff; font-size: 16px; }
+
+        .scroll-container { 
+            width: 100vw; height: calc(100vh - 290px); 
+            overflow: auto; display: flex; justify-content: center; align-items: center;
+            padding: 20px;
+        }
+        
+        /* 10x10 격자 (15평) */
+        .room-wrapper {
+            display: grid;
+            grid-template-columns: 20px repeat(10, 48px) 20px;
+            grid-template-rows: 20px repeat(10, 48px) 20px;
+            background: #343a40;
+            border-radius: 8px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+            padding: 4px;
+            position: relative;
+        }
+
+        .wall-cell {
+            background-color: #495057;
+            border: 1px solid #343a40;
+            display: flex; align-items: center; justify-content: center;
+            position: relative; cursor: pointer;
+            transition: background-color 0.15s;
+        }
+        .wall-cell:hover { background-color: #5c636a; }
+        .wall-cell.corner { background-color: #212529; cursor: default; }
+
+        .board { 
+            grid-column: 2 / 12; grid-row: 2 / 12;
+            display: grid; grid-template-columns: repeat(10, 48px); grid-template-rows: repeat(10, 48px); 
+            background-color: #e9ecef; position: relative; touch-action: none;
+        }
+        .cell { width: 48px; height: 48px; background-color: #f8f9fa; display: flex; align-items: center; justify-content: center; border: 0.5px solid #dee2e6; position: relative; box-sizing: border-box; }
+        
+        /* 바닥 레이어 */
+        .wood-tile { background-color: #eedcc6 !important; background-image: repeating-linear-gradient(0deg, transparent, transparent 47px, #dfc7ab 48px); }
+        .tile-floor { background-color: #f1f3f5 !important; background-image: linear-gradient(#e9ecef 1px, transparent 1px), linear-gradient(90deg, #e9ecef 1px, transparent 1px); background-size: 24px 24px; }
+        .bath-floor { background-color: #d0ebff !important; background-image: linear-gradient(#a5d8ff 1px, transparent 1px), linear-gradient(90deg, #a5d8ff 1px, transparent 1px); background-size: 16px 16px; }
+
+        /* 러그 레이어 (가구 아래 오버레이) */
+        .rug-layer {
+            position: absolute; inset: 2px;
+            background-color: #f1f3f5;
+            border: 1.5px dashed #adb5bd;
+            border-radius: 4px;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* 외벽 문 / 창문 / 벽걸이에어컨 */
+        .wall-door { width: 100%; height: 100%; background: #ffec99; border: 2px solid #fcc419; }
+        .wall-window { width: 100%; height: 100%; background: #74c0fc; border: 2px solid #339af0; }
+        .wall-ac { width: 100%; height: 100%; background: #e7f5ff; border: 2px solid #1c7ed6; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: #1864ab; }
+
+        /* 핵심: top-left 기준 축 배치 및 정확한 transform 매트릭스 구현 */
+        .placed-furniture {
+            position: absolute; top: 0; left: 0;
+            pointer-events: auto; cursor: grab;
+            transform-origin: 0 0; /* 좌상단을 회전축으로 고정 */
+            transition: transform 0.15s ease, opacity 0.15s ease;
+            z-index: 10;
+        }
+        .placed-furniture.is-dragging { opacity: 0.4; cursor: grabbing; }
+
+        /* 드래그 하이라이트 */
+        .cell.drag-hover-valid { background-color: #a5d8ff !important; border: 1.5px solid #228be6 !important; z-index: 20; }
+        .cell.drag-hover-invalid { background-color: #ffc9c9 !important; border: 1.5px solid #fa5252 !important; z-index: 20; }
+
+        /* 탑뷰 CSS 그래픽 스타일 */
+        .bed-item { width: 100%; height: 100%; background: #f8f9fa; border: 2px solid #adb5bd; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 6px; box-shadow: inset 0 0 4px rgba(0,0,0,0.05); }
+        .pillow { width: 75%; height: 14px; background: #e9ecef; border: 1px solid #ced4da; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .blanket { width: 92%; height: 58%; background: #a5d8ff; border: 1px solid #74c0fc; border-radius: 4px; }
+
+        .sofa-item { width: 100%; height: 100%; background: #ffe066; border: 2px solid #fcc419; border-radius: 8px; display: flex; justify-content: space-around; align-items: center; padding: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
+        .sofa-cushion { width: 42%; height: 75%; background: #fff3bf; border: 1px solid #ffe066; border-radius: 5px; }
+
+        .sink-item { width: 100%; height: 100%; background: #f1f3f5; border: 2px solid #868e96; border-radius: 4px; display: flex; align-items: center; justify-content: space-around; padding: 3px; }
+        .sink-bowl { width: 42%; height: 80%; background: #ffffff; border: 2px solid #adb5bd; border-radius: 4px; position: relative; }
+        .sink-faucet { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); width: 5px; height: 8px; background: #495057; border-radius: 2px; }
+        .stove-top { width: 42%; height: 80%; background: #343a40; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: space-around; padding: 2px; }
+        .burner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #ff6b6b; background: #212529; }
+
+        .bathroom-room-item {
+            width: 100%; height: 100%; background: #e7f5ff; border: 2px solid #339af0; border-radius: 6px;
+            display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 4px; padding: 6px; position: relative;
+        }
+        .bath-door-arc {
+            position: absolute; bottom: 0; right: 8px; width: 22px; height: 22px;
+            border-right: 2px dashed #228be6; border-bottom: 2px dashed #228be6; border-radius: 0 0 100% 0;
+            pointer-events: none;
+        }
+
+        .toilet-item { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .toilet-tank { width: 75%; height: 26%; background: #fff; border: 2px solid #ced4da; border-radius: 3px; }
+        .toilet-bowl { width: 62%; height: 58%; background: #fff; border: 2px solid #ced4da; border-radius: 0 0 14px 14px; margin-top: 1px; box-shadow: inset 0 -2px 4px rgba(0,0,0,0.05); }
+
+        .bath-sink { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+        .bath-sink-bowl { width: 80%; height: 80%; background: #fff; border: 2px solid #495057; border-radius: 50%; position: relative; box-shadow: inset 0 0 3px rgba(0,0,0,0.1); }
+
+        .desk-item { width: 100%; height: 100%; background: #d7ccc8; border: 2px solid #8d6e63; border-radius: 5px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 5px; }
+        .laptop { width: 55%; height: 38%; background: #343a40; border-radius: 3px; border: 1px solid #212529; }
+        .desk-chair { width: 45%; height: 32%; background: #a1887f; border-radius: 4px; border: 1px solid #6d4c41; }
+
+        .bookshelf-item { width: 100%; height: 100%; background: #8d6e63; border: 1.5px solid #5d4037; border-radius: 3px; display: flex; align-items: center; justify-content: space-around; padding: 2px; }
+        .book { width: 16%; height: 85%; border-radius: 1px; box-shadow: 0 1px 1px rgba(0,0,0,0.15); }
+
+        .gaming-item { width: 100%; height: 100%; background: #212529; border: 2px solid #ff6b6b; border-radius: 5px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 4px; }
+        .gaming-screen { width: 85%; height: 25%; background: #38d9a9; border-radius: 2px; box-shadow: 0 0 4px #38d9a9; }
+        .gaming-chair { width: 45%; height: 35%; background: #ff6b6b; border-radius: 4px; }
+
+        .plant-monstera { width: 80%; height: 80%; background: #40c057; border-radius: 50% 10% 50% 10%; border: 2px solid #2b8a3e; position: relative; }
+        .plant-flower { width: 75%; height: 75%; background: #ff8787; border-radius: 50%; border: 2px solid #f03e3e; display: flex; align-items: center; justify-content: center; }
+        .plant-center { width: 10px; height: 10px; background: #ffd43b; border-radius: 50%; }
+
+        .footer-ui { position: fixed; bottom: 0; left: 0; right: 0; background: white; padding: 12px; display: flex; gap: 10px; z-index: 2000; box-shadow: 0 -5px 15px rgba(0,0,0,0.08); justify-content: center; }
+        button.action-btn { max-width: 350px; flex: 1; padding: 14px; font-size: 14px; font-weight: bold; border-radius: 10px; border: none; color: white; cursor: pointer; transition: background 0.15s; }
+        .btn-save { background: #339af0; }
+        .btn-save:hover { background: #228be6; }
+        .btn-reset { background: #fa5252; }
+        .btn-reset:hover { background: #e03131; }
+    </style>
+</head>
+<body>
+    <div class="header-ui">
+        <div class="controls-bar">
+            <span style="font-size: 13px; font-weight: bold; color: #495057;">📐 15평 원룸 평면도 꾸미기</span>
+            <button class="rotate-btn" onclick="toggleRotation()">🔄 배치 회전 (0°)</button>
+        </div>
+        <div class="palette" id="palette"></div>
+    </div>
+    <div class="scroll-container">
+        <div class="room-wrapper" id="roomWrapper"></div>
+    </div>
+    <div class="footer-ui">
+        <button class="action-btn btn-save" onclick="saveImage()">🖼️ 원룸 평면도 저장</button>
+        <button class="action-btn btn-reset" onclick="resetBoard()">🗑️ 방 비우기</button>
+    </div>
+
+    <script>
+        const tiles = [
+            // 바닥재 & 러그
+            {n:"원목 마루", c:"wood-tile", t:"1x1"},
+            {n:"포셀린 타일", c:"tile-floor", t:"1x1"},
+            {n:"욕실 타일", c:"bath-floor", t:"1x1"},
+            {n:"카펫 러그", isRug: true, t:"2x2"},
+
+            // 외벽 전용
+            {n:"외벽 창문", type:"wall-win", i:"🪟"},
+            {n:"외벽 출입문", type:"wall-door", i:"🚪"},
+            {n:"벽걸이에어컨", type:"wall-ac", i:"❄️"},
+
+            // 방 단위 욕실 세트
+            {n:"욕실 세트 방", html:`
+                <div class="bathroom-room-item">
+                    <div class="toilet-item"><div class="toilet-tank"></div><div class="toilet-bowl"></div></div>
+                    <div class="bath-sink"><div class="bath-sink-bowl"></div></div>
+                    <div class="shower-item" style="width:100%;height:100%;background:#d0ebff;border:1.5px dashed #339af0;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:14px;">🚿</div>
+                    <div></div>
+                    <div class="bath-door-arc"></div>
+                </div>`, t:"2x2"},
+
+            // 주방 & 욕실 단품
+            {n:"주방 싱크대", html:`<div class="sink-item"><div class="stove-top"><div class="burner"></div><div class="burner"></div></div><div class="sink-bowl"><div class="sink-faucet"></div></div></div>`, t:"2x1"},
+            {n:"양문 냉장고", html:`<div class="bed-item" style="background:#f8f9fa"><div style="height:40%;width:100%;border-bottom:2px solid #ced4da"></div><div style="height:50%;width:100%"></div></div>`, t:"2x2"},
+            {n:"변기", html:`<div class="toilet-item"><div class="toilet-tank"></div><div class="toilet-bowl"></div></div>`, t:"1x1"},
+            {n:"욕실 세면대", html:`<div class="bath-sink"><div class="bath-sink-bowl"></div></div>`, t:"1x1"},
+            {n:"욕조", html:`<div style="width:100%;height:100%;background:#fff;border:2px solid #339af0;border-radius:8px;display:flex;align-items:center;padding:4px"><div style="width:8px;height:8px;border-radius:50%;background:#adb5bd"></div></div>`, t:"2x1"},
+
+            // 주요 가구
+            {n:"싱글 침대", html:`<div class="bed-item"><div class="pillow"></div><div class="blanket"></div></div>`, t:"2x3"},
+            {n:"2인 소파", html:`<div class="sofa-item"><div class="sofa-cushion"></div><div class="sofa-cushion"></div></div>`, t:"3x2"},
+            {n:"공부 책상", html:`<div class="desk-item"><div class="laptop"></div><div class="desk-chair"></div></div>`, t:"2x2"},
+            {n:"책장", html:`<div class="bookshelf-item"><div class="book" style="background:#ff6b6b"></div><div class="book" style="background:#4dabf7"></div><div class="book" style="background:#51cf66"></div></div>`, t:"2x1"},
+            {n:"게이밍 데스크", html:`<div class="gaming-item"><div class="gaming-screen"></div><div class="gaming-chair"></div></div>`, t:"2x2"},
+            {n:"옷장", html:`<div style="width:100%;height:100%;background:#e9ecef;border:2px solid #868e96;position:relative"><div style="position:absolute;top:15%;bottom:15%;left:50%;width:2px;background:#adb5bd"></div></div>`, t:"2x2"},
+            {n:"TV & 거실장", html:`<div style="width:100%;height:100%;background:#d7ccc8;border:1.5px solid #8d6e63;display:flex;align-items:center;justify-content:center"><div style="width:85%;height:6px;background:#212529;border-radius:2px"></div></div>`, t:"3x1"},
+
+            // 가전 및 소품
+            {n:"드럼세탁기", html:`<div style="width:100%;height:100%;background:#fff;border:2px solid #adb5bd;border-radius:50%;display:flex;align-items:center;justify-content:center"><div style="width:20px;height:20px;border-radius:50%;background:#e7f5ff;border:2px solid #868e96"></div></div>`, t:"1x1"},
+            {n:"몬스테라", html:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center"><div class="plant-monstera"></div></div>`, t:"1x1"},
+            {n:"꽃 화분", html:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center"><div class="plant-flower"><div class="plant-center"></div></div></div>`, t:"1x1"},
+
+            // 지우개
+            {n:"지우개", i:"🧹", t:"eraser"}
+        ];
+
+        let selected = tiles[0], currentAngle = 0;
+        const gridSize = 10, cells = [];
+        const wrapper = document.getElementById('roomWrapper');
+
+        function toggleRotation() {
+            currentAngle = (currentAngle + 90) % 360;
+            document.querySelector('.rotate-btn').innerText = `🔄 배치 회전 (${currentAngle}°)`;
+        }
+
+        // 회전 각도에 따른 유효 영역(cell 수) 계산
+        function getEffectiveSize({ w, h }, angle) {
+            return (angle === 90 || angle === 270) ? { ew: h, eh: w } : { ew: w, eh: h };
+        }
+
+        // 축 중심 변환(transform-origin: 0 0)에 맞춰 정확한 translate 및 rotate 적용
+        function getTransformCSS(w, h, angle) {
+            const pxW = w * 48;
+            const pxH = h * 48;
+            switch(angle) {
+                case 90:
+                    return `translate(${pxH}px, 0px) rotate(90deg)`;
+                case 180:
+                    return `translate(${pxW}px, ${pxH}px) rotate(180deg)`;
+                case 270:
+                    return `translate(0px, ${pxW}px) rotate(270deg)`;
+                case 0:
+                default:
+                    return `translate(0px, 0px) rotate(0deg)`;
+            }
+        }
+
+        const pEl = document.getElementById('palette');
+        tiles.forEach(t => {
+            const btn = document.createElement('div');
+            btn.className = 'tile-btn';
+            if(t === selected) btn.classList.add('active');
+            
+            let pre = '';
+            if (t.isRug) {
+                pre = `<div class="tile-preview"><div style="width:80%;height:80%;border:1.5px dashed #adb5bd;background:#f1f3f5;border-radius:3px;"></div></div>`;
+            } else if (t.html) {
+                pre = `<div class="tile-preview">${t.html}</div>`;
+            } else {
+                pre = `<div class="tile-preview ${t.c || ''}">${t.i || ''}</div>`;
+            }
+
+            btn.innerHTML = `${pre}${t.n}`;
+            btn.onclick = () => { 
+                document.querySelectorAll('.tile-btn').forEach(b => b.classList.remove('active')); 
+                btn.classList.add('active'); 
+                selected = t; 
+            };
+            pEl.appendChild(btn);
+        });
+
+        // 10x10 격자 및 외벽 생성
+        for (let r = 0; r < 12; r++) {
+            for (let c = 0; c < 12; c++) {
+                if (r === 0 || r === 11 || c === 0 || c === 11) {
+                    const wall = document.createElement('div');
+                    wall.className = 'wall-cell';
+                    if ((r === 0 || r === 11) && (c === 0 || c === 11)) wall.classList.add('corner');
+                    else {
+                        wall.onclick = () => {
+                            if (selected.t === "eraser") wall.innerHTML = "";
+                            else if (selected.type === "wall-win") wall.innerHTML = `<div class="wall-window"></div>`;
+                            else if (selected.type === "wall-door") wall.innerHTML = `<div class="wall-door"></div>`;
+                            else if (selected.type === "wall-ac") wall.innerHTML = `<div class="wall-ac">AC</div>`;
+                        };
+                    }
+                    wrapper.appendChild(wall);
+                } else if (r === 1 && c === 1) {
+                    const board = document.createElement('div');
+                    board.className = 'board';
+                    board.id = 'board';
+                    wrapper.appendChild(board);
+
+                    for (let i = 0; i < gridSize * gridSize; i++) {
+                        const cell = document.createElement('div');
+                        cell.className = 'cell';
+                        cell.dataset.index = i;
+                        cell.onclick = (e) => handleCellClick(i, cell, e);
+                        cells.push(cell);
+                        board.appendChild(cell);
+                    }
+                }
+            }
+        }
+
+        function parseSize(t) {
+            if(!t || t === "eraser") return { w: 1, h: 1 };
+            const parts = t.split('x');
+            return { w: parseInt(parts[0]), h: parseInt(parts[1]) };
+        }
+
+        function handleCellClick(idx, cell, e) {
+            if (isDraggingState) return;
+            const furn = e.target.closest('.placed-furniture');
+            
+            // 지우개 기능
+            if (selected.t === "eraser") {
+                if (furn) {
+                    const pIdx = parseInt(furn.parentElement.dataset.index);
+                    clearTileData(pIdx);
+                } else {
+                    const rug = cell.querySelector('.rug-layer');
+                    if (rug) {
+                        rug.remove();
+                    } else {
+                        cell.className = 'cell';
+                        clearTileData(idx);
+                    }
+                }
+                return;
+            }
+
+            // 배치된 가구 클릭 시 제자리 90도 회전
+            if (furn) {
+                const pIdx = parseInt(furn.parentElement.dataset.index);
+                const w = parseInt(furn.parentElement.dataset.w);
+                const h = parseInt(furn.parentElement.dataset.h);
+                let curAng = parseInt(furn.dataset.angle || 0);
+                let nextAng = (curAng + 90) % 360;
+
+                if (canPlace(pIdx, { w, h }, nextAng, pIdx)) {
+                    furn.dataset.angle = nextAng;
+                    furn.style.transform = getTransformCSS(w, h, nextAng);
+                    updateOccupiedCells(pIdx, { w, h }, nextAng);
+                } else {
+                    alert("벽이나 다른 가구와 겹쳐서 회전할 수 없습니다.");
+                }
+                return;
+            }
+
+            // 러그 배치 (바닥 오버레이 레이어)
+            if (selected.isRug) {
+                const sz = parseSize(selected.t);
+                applyRugLayer(idx, sz, currentAngle);
+                return;
+            }
+
+            // 기본 바닥 타일 칠하기
+            if (selected.c) { 
+                cell.className = 'cell ' + selected.c; 
+                return; 
+            }
+
+            if (selected.type) return;
+
+            // 새 가구 배치
+            let sz = parseSize(selected.t);
+            if (canPlace(idx, sz, currentAngle)) {
+                forcePlace(idx, selected.html, sz, currentAngle);
+            }
+        }
+
+        function applyRugLayer(idx, { w, h }, angle) {
+            const { ew, eh } = getEffectiveSize({ w, h }, angle);
+            const row = Math.floor(idx / gridSize), col = idx % gridSize;
+
+            if (row + eh > gridSize || col + ew > gridSize) return;
+
+            for (let r = 0; r < eh; r++) {
+                for (let c = 0; c < ew; c++) {
+                    const tIdx = idx + (r * gridSize) + c;
+                    const cell = cells[tIdx];
+                    if (cell) {
+                        if (!cell.querySelector('.rug-layer')) {
+                            const rugDiv = document.createElement('div');
+                            rugDiv.className = 'rug-layer';
+                            cell.appendChild(rugDiv);
+                        }
+                    }
+                }
+            }
+        }
+
+        let draggedFurn = null, dragStartCellIdx = null, dragSize = {w:1, h:1}, dragAngle = 0, dragHtml = "";
+        let isDraggingState = false, activeHoverIndices = [];
+
+        document.addEventListener('pointerdown', (e) => {
+            const furn = e.target.closest('.placed-furniture');
+            if (!furn || selected.t === "eraser") return;
+
+            draggedFurn = furn;
+            const parentCell = furn.parentElement;
+            dragStartCellIdx = parseInt(parentCell.dataset.index);
+            dragSize = { w: parseInt(parentCell.dataset.w), h: parseInt(parentCell.dataset.h) };
+            dragAngle = parseInt(furn.dataset.angle || 0);
+            dragHtml = furn.innerHTML;
+
+            furn.setPointerCapture(e.pointerId);
+            furn.classList.add('is-dragging');
+            isDraggingState = false;
+        });
+
+        document.addEventListener('pointermove', (e) => {
+            if (!draggedFurn) return;
+            isDraggingState = true;
+
+            const boardRect = document.getElementById('board').getBoundingClientRect();
+            const cellW = boardRect.width / gridSize;
+            const cellH = boardRect.height / gridSize;
+
+            const { ew, eh } = getEffectiveSize(dragSize, dragAngle);
+
+            let targetCol = Math.floor((e.clientX - boardRect.left) / cellW);
+            let targetRow = Math.floor((e.clientY - boardRect.top) / cellH);
+
+            targetCol = Math.max(0, Math.min(gridSize - ew, targetCol));
+            targetRow = Math.max(0, Math.min(gridSize - eh, targetRow));
+
+            const targetIdx = targetRow * gridSize + targetCol;
+
+            clearHoverHighlights();
+
+            const isValid = canPlace(targetIdx, dragSize, dragAngle, dragStartCellIdx);
+            
+            for (let r = 0; r < eh; r++) {
+                for (let c = 0; c < ew; c++) {
+                    const idx = targetIdx + (r * gridSize) + c;
+                    if (cells[idx]) {
+                        cells[idx].classList.add(isValid ? 'drag-hover-valid' : 'drag-hover-invalid');
+                        activeHoverIndices.push(idx);
+                    }
+                }
+            }
+            draggedFurn.dataset.targetIdx = targetIdx;
+            draggedFurn.dataset.targetValid = isValid;
+        });
+
+        document.addEventListener('pointerup', (e) => {
+            if (!draggedFurn) return;
+
+            draggedFurn.classList.remove('is-dragging');
+            clearHoverHighlights();
+
+            if (isDraggingState) {
+                const targetIdx = parseInt(draggedFurn.dataset.targetIdx);
+                const isValid = draggedFurn.dataset.targetValid === "true";
+
+                if (isValid && !isNaN(targetIdx)) {
+                    clearTileData(dragStartCellIdx);
+                    forcePlace(targetIdx, dragHtml, dragSize, dragAngle);
+                }
+            }
+
+            setTimeout(() => { isDraggingState = false; }, 50);
+            draggedFurn = null;
+        });
+
+        function clearHoverHighlights() {
+            activeHoverIndices.forEach(i => {
+                if (cells[i]) cells[i].classList.remove('drag-hover-valid', 'drag-hover-invalid');
+            });
+            activeHoverIndices = [];
+        }
+
+        // 정확한 경계 영역 검사
+        function canPlace(idx, { w, h }, angle = 0, ignoreStartIdx = null) {
+            const { ew, eh } = getEffectiveSize({ w, h }, angle);
+            const row = Math.floor(idx / gridSize), col = idx % gridSize;
+            
+            // 외벽 충돌 검사
+            if (row < 0 || col < 0 || row + eh > gridSize || col + ew > gridSize) return false;
+
+            for (let r = 0; r < eh; r++) {
+                for (let cl = 0; cl < ew; cl++) {
+                    const tIdx = idx + (r * gridSize) + cl;
+                    if (!cells[tIdx]) return false;
+                    const pIdx = cells[tIdx].dataset.parentIdx;
+                    if (pIdx !== undefined && parseInt(pIdx) !== ignoreStartIdx) return false;
+                }
+            }
+            return true;
+        }
+
+        function updateOccupiedCells(idx, { w, h }, angle) {
+            const { ew, eh } = getEffectiveSize({ w, h }, angle);
+            
+            for (let i = 0; i < gridSize * gridSize; i++) {
+                if (cells[i].dataset.parentIdx === String(idx)) {
+                    delete cells[i].dataset.parentIdx;
+                }
+            }
+            for (let r = 0; r < eh; r++) {
+                for (let cl = 0; cl < ew; cl++) {
+                    const tIdx = idx + (r * gridSize) + cl;
+                    cells[tIdx].dataset.parentIdx = idx;
+                }
+            }
+        }
+
+        function forcePlace(idx, html, { w, h }, angle) {
+            const { ew, eh } = getEffectiveSize({ w, h }, angle);
+            
+            for (let r = 0; r < eh; r++) {
+                for (let cl = 0; cl < ew; cl++) {
+                    const tIdx = idx + (r * gridSize) + cl;
+                    cells[tIdx].dataset.parentIdx = idx;
+                }
+            }
+
+            const furn = document.createElement('div');
+            furn.className = 'placed-furniture';
+            furn.style.width = (w * 48) + 'px';
+            furn.style.height = (h * 48) + 'px';
+            furn.style.transform = getTransformCSS(w, h, angle);
+            furn.dataset.angle = angle;
+            furn.innerHTML = html;
+            
+            cells[idx].appendChild(furn);
+            cells[idx].dataset.w = w;
+            cells[idx].dataset.h = h;
+        }
+
+        function clearTileData(idx) {
+            const cell = cells[idx];
+            if (!cell || cell.dataset.parentIdx === undefined) return;
+            const pIdx = parseInt(cell.dataset.parentIdx);
+            
+            for (let i = 0; i < gridSize * gridSize; i++) {
+                if (cells[i].dataset.parentIdx === String(pIdx)) {
+                    const furn = cells[i].querySelector('.placed-furniture');
+                    if (furn) furn.remove();
+                    delete cells[i].dataset.parentIdx;
+                    delete cells[i].dataset.w;
+                    delete cells[i].dataset.h;
+                }
+            }
+        }
+
+        function saveImage() {
+            html2canvas(wrapper, { scale: 3, backgroundColor: "#f1f3f5" }).then(canvas => {
+                const a = document.createElement('a');
+                a.download = 'my_15py_studio_layout.png';
+                a.href = canvas.toDataURL("image/png");
+                a.click();
+            });
+        }
+
+        function resetBoard() {
+            if (confirm("모든 배치를 초기화하시겠습니까?")) {
+                cells.forEach(c => { 
+                    c.className = 'cell'; 
+                    c.innerHTML = ''; 
+                    delete c.dataset.parentIdx; 
+                    delete c.dataset.w; 
+                    delete c.dataset.h; 
+                });
+                document.querySelectorAll('.wall-cell').forEach(w => w.innerHTML = "");
+            }
+        }
+    </script>
+</body>
+</html>
